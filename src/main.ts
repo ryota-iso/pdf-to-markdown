@@ -132,21 +132,36 @@ export const uploadImages = (
       const dd = String(today.getDate()).padStart(2, "0");
       const ymd = `${yyyy}-${mm}-${dd}`;
       const uploaded: ImageMap = [];
-      for (const { id, imageBase64 } of images) {
-        if (!imageBase64) continue;
-        const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/\s+/g, "");
-        const body = decodeBase64(base64);
-        const key = `paper/${ymd}/${id}.png`;
+
+      for (const { id: originalId, imageBase64 } of images) {
+        if (!imageBase64) {
+          console.warn(`no base64 for image ${originalId}, skipped`);
+          continue;
+        }
+        const mimeMatch = imageBase64.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (!mimeMatch) {
+          console.warn(`invalid base64 header for ${originalId}, skipped`);
+          continue;
+        }
+        const mimeType = mimeMatch[1];
+        const rawBase64 = mimeMatch[2].replace(/\s+/g, "");
+        const body = decodeBase64(rawBase64);
+
+        const ext = mimeType.split("/")[1];
+        const baseName = originalId.replace(/\.\w+$/, "");
+        const key = `paper/${ymd}/${baseName}.${ext}`;
+
         await client.send(
           new PutObjectCommand({
             Bucket: bucketName,
             Key: key,
             Body: body,
-            ContentType: "image/png",
+            ContentType: mimeType,
             ACL: "public-read",
           }),
         );
-        uploaded.push({ id, url: `${publicUrl}/${key}` });
+
+        uploaded.push({ id: originalId, url: `${publicUrl}/${key}` });
       }
       return uploaded;
     })(),
@@ -158,23 +173,23 @@ const generateMarkdown = (args: { objects: OCRPageObject[]; images: ImageMap; ou
   const { objects, images, outDir } = args;
   return ResultAsync.fromPromise(
     (async () => {
+      const idUrlMap = new Map(images.map(img => [img.id, img.url]));
       const combinedLines: string[] = [];
+
       for (const object of objects) {
-        const lines: string[] = [];
-        lines.push(`# Page ${object.index + 1}`);
-        lines.push("");
-        lines.push(object.markdown);
-        lines.push("");
-        for (const img of object.images) {
-          const uploaded = images.find((u) => u.id === img.id);
-          if (!uploaded) continue;
-          lines.push(`![${img.id}](${uploaded.url})`);
-          lines.push("");
+        let md = object.markdown;
+        for (const [id, url] of idUrlMap) {
+          const esc = (s: string) => s.replace(/[-[\]/{}()*+?.\\^$|]/g, "\\$&");
+          const pattern = new RegExp(`!\\[${esc(id)}\\]\\(${esc(id)}\\)`, "g");
+          md = md.replace(pattern, `![${id}](${url})`);
         }
+
         const filePath = join(outDir, `page-${object.index + 1}.md`);
-        await Deno.writeTextFile(filePath, lines.join("\n"));
-        combinedLines.push(...lines, "");
+        await Deno.writeTextFile(filePath, md + "\n");
+
+        combinedLines.push("", md, "");
       }
+
       const combinedPath = join(outDir, "all-pages.md");
       await Deno.writeTextFile(combinedPath, combinedLines.join("\n"));
     })(),
