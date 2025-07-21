@@ -114,9 +114,10 @@ export const uploadImages = (
     secretAccessKey: string;
     publicUrl: string;
     images: OCRPageObject["images"][number][];
+    inputFileName: string;
   },
 ): ResultAsync<ImageMap, SystemError> => {
-  const { bucketName, s3Url, accessKeyId, secretAccessKey, publicUrl, images } = args;
+  const { bucketName, s3Url, accessKeyId, secretAccessKey, publicUrl, images, inputFileName } = args;
 
   const client = new S3Client({
     region: "auto",
@@ -133,6 +134,8 @@ export const uploadImages = (
       const ymd = `${yyyy}-${mm}-${dd}`;
       const uploaded: ImageMap = [];
 
+      const fileBaseName = inputFileName.replace(/\.[^/.]+$/, "");
+
       for (const { id: originalId, imageBase64 } of images) {
         if (!imageBase64) {
           console.warn(`no base64 for image ${originalId}, skipped`);
@@ -148,8 +151,7 @@ export const uploadImages = (
         const body = decodeBase64(rawBase64);
 
         const ext = mimeType.split("/")[1];
-        const baseName = originalId.replace(/\.\w+$/, "");
-        const key = `paper/${ymd}/${baseName}.${ext}`;
+        const key = `paper/${ymd}/${fileBaseName}_${originalId}.${ext}`;
 
         await client.send(
           new PutObjectCommand({
@@ -228,6 +230,7 @@ const main = async (): Promise<Result<void, AppError>> => {
     secretAccessKey: R2_SECRET_ACCESS_KEY,
     publicUrl: R2_PUBLIC_URL,
     images: ocrPageObject.flatMap((object) => object.images),
+    inputFileName: basename(input),
   });
   if (imageUploadResult.isErr()) return err(imageUploadResult.error);
   const imageMap = imageUploadResult.value;
